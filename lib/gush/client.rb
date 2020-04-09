@@ -1,4 +1,5 @@
 require 'redis'
+require 'redis-mutex'
 require 'concurrent-ruby'
 
 module Gush
@@ -152,12 +153,32 @@ module Gush
       redis.expire("gush.jobs.#{workflow_id}.#{job.klass}", ttl)
     end
 
+    def reenqueue_job(workflow_id, job)
+      queue = job.queue || configuration.namespace
+
+      Gush::Worker.set(queue: queue).perform_later(*[workflow_id, job.name])
+    end
+
     def enqueue_job(workflow_id, job)
       job.enqueue!
       persist_job(workflow_id, job)
       queue = job.queue || configuration.namespace
 
       Gush::Worker.set(queue: queue).perform_later(*[workflow_id, job.name])
+    end
+
+    def enqueue_outgoing_jobs(workflow_id, job)
+      job.outgoing.each do |job_name|
+        RedisMutex.with_lock("gush_enqueue_outgoing_jobs_#{workflow_id}-#{job_name}", sleep: 0.3, block: 2) do
+          out = find_job(workflow_id, job_name)
+
+          if out.ready_to_start?
+            enqueue_job(workflow_id, out)
+          end
+        end
+      end
+    rescue RedisMutex::LockError
+      Gush::Worker.set(wait: 2.seconds).perform_later(workflow_id, job.name)
     end
 
     private

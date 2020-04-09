@@ -8,7 +8,7 @@ module Gush
 
       if job.succeeded?
         # Try to enqueue outgoing jobs again because the last job has redis mutex lock error
-        enqueue_outgoing_jobs
+        client.enqueue_outgoing_jobs(workflow_id, job)
         return
       end
 
@@ -17,14 +17,24 @@ module Gush
       error = nil
 
       mark_as_started
-      begin
-        job.perform
-      rescue StandardError => error
-        mark_as_failed
-        raise error
+
+      if job.async?
+        begin
+          job.perform
+        rescue StandardError => error
+          mark_as_failed
+          raise error
+        end
       else
-        mark_as_finished
-        enqueue_outgoing_jobs
+        begin
+          job.perform
+        rescue StandardError => error
+          mark_as_failed
+          raise error
+        else
+          mark_as_finished
+          client.enqueue_outgoing_jobs(workflow_id, job)
+        end
       end
     end
 
@@ -71,18 +81,5 @@ module Gush
       (Time.now - start).to_f.round(3)
     end
 
-    def enqueue_outgoing_jobs
-      job.outgoing.each do |job_name|
-        RedisMutex.with_lock("gush_enqueue_outgoing_jobs_#{workflow_id}-#{job_name}", sleep: 0.3, block: 2) do
-          out = client.find_job(workflow_id, job_name)
-
-          if out.ready_to_start?
-            client.enqueue_job(workflow_id, out)
-          end
-        end
-      end
-    rescue RedisMutex::LockError
-      Worker.set(wait: 2.seconds).perform_later(workflow_id, job.name)
-    end
   end
 end

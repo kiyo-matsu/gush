@@ -61,8 +61,22 @@ module Gush
       @finished_at = current_timestamp
     end
 
+    def async_finish!
+      raise "#async_finish! can be called only on an async job" if self.async? == false
+      finish!
+      client.persist_job(workflow_id, self)
+      client.enqueue_outgoing_jobs(workflow_id, self)
+    end
+
     def fail!
       @finished_at = @failed_at = current_timestamp
+    end
+
+    def async_fail!
+      raise "#async_finish! can be called only on an async job" if self.async? == false
+      fail!
+      client.persist_job(workflow_id, self)
+      client.reenqueue_job(workflow_id, self)
     end
 
     def enqueued?
@@ -103,6 +117,10 @@ module Gush
       incoming.empty?
     end
 
+    def async?
+      false
+    end
+
     private
 
     def client
@@ -126,6 +144,12 @@ module Gush
       @output_payload = opts[:output_payload]
       @workflow_id    = opts[:workflow_id]
       @queue          = opts[:queue]
+    end
+  end
+
+  class AsyncJob < Job
+    def async?
+      true
     end
   end
 end

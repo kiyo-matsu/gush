@@ -33,6 +33,21 @@ describe Gush::Job do
     end
   end
 
+
+  describe "#async_finish!" do
+    it "raises error if job is not an async job" do
+      job = described_class.new(name: "a-job")
+      expect{ job.async_finish! }.to raise_error(RuntimeError)
+    end
+  end
+
+  describe "#async_fail!" do
+    it "raises error if job is not an async job" do
+      job = described_class.new(name: "a-job")
+      expect{ job.async_fail! }.to raise_error(RuntimeError)
+    end
+  end
+
   describe "#enqueue!" do
     it "resets flags to false and sets enqueued to true" do
       job = described_class.new(name: "a-job")
@@ -64,6 +79,13 @@ describe Gush::Job do
 
       expect(job.started_at).to eq(Time.now.to_i)
       expect(job.failed_at).to eq(nil)
+    end
+  end
+
+  describe "#async" do
+    it "returns correct state" do
+      job = described_class.new(name: "a-job")
+      expect(job.async?).to be_falsy
     end
   end
 
@@ -118,6 +140,29 @@ describe Gush::Job do
       expect(job.finished_at).to eq(122)
       expect(job.started_at).to eq(55)
       expect(job.enqueued_at).to eq(444)
+    end
+  end
+end
+
+describe Gush::AsyncJob do
+  describe "#async" do
+    it "returns correct state" do
+      job = described_class.new(name: "a-job")
+      expect(job.async?).to be_truthy
+    end
+  end
+
+  describe "#async_finish!" do
+    it "registers nothing if outgoing job is not exists" do
+      job = described_class.new(name: "a-job")
+      job.async_finish!
+      expect(job.finished_at).to eq(Time.now.to_i)
+      expect(job.failed?).to eq(false)
+      expect(job.running?).to eq(false)
+      expect(job.finished?).to eq(true)
+      expect(job.enqueued?).to eq(false)
+
+      expect(Gush::Worker).to have_jobs(job.workflow_id, jobs_with_id([]))
     end
   end
 end

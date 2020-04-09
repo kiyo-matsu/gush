@@ -62,6 +62,80 @@ describe "Workflows" do
     end
   end
 
+  context 'when one of the jobs is async' do
+    class AsyncOne < Gush::AsyncJob
+      def perform
+        async_finish!
+      end
+    end
+
+    class AsyncWorkflow < Gush::Workflow
+      def configure
+        run Prepare
+        run AsyncOne, after: Prepare
+        run NormalizeJob, after: AsyncOne
+      end
+    end
+
+    it 'runs the whole workflow' do
+      flow = AsyncWorkflow.create
+      perform_enqueued_jobs do
+        flow.start!
+      end
+
+      flow = flow.reload
+      expect(flow).to be_finished
+
+    end
+
+    context 'when one of the jobs fails initally' do
+      it 'succeeds when the job retries' do
+        FAIL_THEN_SUCCEED_SPY2 = double()
+        allow(FAIL_THEN_SUCCEED_SPY2).to receive(:foo).and_return('failure', 'success')
+  
+        class FailsThenSucceedsAsync < Gush::AsyncJob
+          def perform
+            if FAIL_THEN_SUCCEED_SPY2.foo == 'failure'
+              async_fail!
+            else
+              async_finish!
+            end
+          end
+        end
+  
+        class SecondChanceAsyncWorkflow < Gush::Workflow
+          def configure
+            run Prepare
+            run FailsThenSucceedsAsync, after: Prepare
+            run NormalizeJob, after: FailsThenSucceedsAsync
+          end
+        end
+  
+        flow = SecondChanceAsyncWorkflow.create
+        flow.start!
+  
+        expect(Gush::Worker).to have_jobs(flow.id, jobs_with_id(['Prepare']))
+        perform_one
+  
+        expect(Gush::Worker).to have_jobs(flow.id, jobs_with_id(['FailsThenSucceedsAsync']))
+        perform_one
+
+        expect(flow.reload).to be_failed
+        expect(Gush::Worker).to have_jobs(flow.id, jobs_with_id(['FailsThenSucceedsAsync']))
+  
+        # Retry the same job again, but this time succeeds
+        perform_one
+  
+        expect(Gush::Worker).to have_jobs(flow.id, jobs_with_id(['NormalizeJob']))
+        perform_one
+  
+        flow = flow.reload
+        expect(flow).to be_finished
+        expect(flow).to_not be_failed
+      end
+    end
+  end
+
   it "runs the whole workflow in proper order" do
     flow = TestWorkflow.create
     flow.start!
